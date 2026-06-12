@@ -22,12 +22,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ui = [
+    "streamlit>=1.50,<2",
+]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
     "respx>=0.21",
     "ruff>=0.5",
     "mypy>=1.10",
+    "streamlit>=1.50,<2",
 ]
 
 [project.scripts]
@@ -51,6 +55,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
 files = ["src/beto"]
+# app.py é cola do Streamlit (API dinâmica) — checado por ruff, não por mypy
+exclude = ["src/beto/ui/app.py"]
 python_version = "3.11"
 ignore_missing_imports = true
 no_implicit_optional = true
