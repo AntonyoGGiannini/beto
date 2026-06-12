@@ -1,0 +1,16 @@
+# segredos e dados locais
+.env
+beto.db
+debug/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+.coverage

@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "beto"
+version = "0.1.0"
+description = "Detector de arbitragem (surebets) em casas de aposta brasileiras — alertas via Telegram"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx[http2]>=0.27,<0.29",
+    "playwright>=1.44,<2",
+    "selectolax>=0.3.21",
+    "rapidfuzz>=3.9,<4",
+    "unidecode>=1.3",
+    "python-telegram-bot>=21,<22",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "structlog>=24.1",
+    "tenacity>=8.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+beto = "beto.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/beto"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+files = ["src/beto"]
+python_version = "3.11"
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_redundant_casts = true
