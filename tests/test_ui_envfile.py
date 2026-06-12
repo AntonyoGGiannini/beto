@@ -32,3 +32,10 @@ def test_todos_os_campos_existem_no_settings():
     s = Settings(_env_file=None)
     for field in ALL_FIELDS:
         assert hasattr(s, field), field
+
+
+def test_proxy_server_persistido_no_env():
+    # regressão: salvar pela interface não pode apagar BETO_PROXY_SERVER (round-trip)
+    assert "proxy_server" in ALL_FIELDS
+    text = to_env_text({"proxy_server": "http://user:pass@host:3128"})
+    assert "BETO_PROXY_SERVER=http://user:pass@host:3128" in text

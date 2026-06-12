@@ -36,6 +36,7 @@ ENV_GROUPS: list[tuple[str, list[str]]] = [
             "request_max_delay_s",
             "headless",
             "render_wait_ms",
+            "proxy_server",
         ],
     ),
     ("Diversos", ["db_path", "log_level", "log_json", "debug_dump", "debug_dump_dir"]),

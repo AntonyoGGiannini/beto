@@ -28,6 +28,15 @@ def test_proxy_com_credenciais_separa_server_e_login():
     }
 
 
+def test_proxy_decodifica_credenciais_percent_encoded():
+    # urlsplit não decodifica %XX; o Playwright recebe os campos já decodificados
+    assert _settings("http://user%40acme:p%40ss%2Fw@proxy.br:3128").playwright_proxy == {
+        "server": "http://proxy.br:3128",
+        "username": "user@acme",
+        "password": "p@ss/w",
+    }
+
+
 def test_httpx_usa_a_url_inteira():
     # o httpx recebe proxy_server direto (credenciais embutidas), sem conversão
     s = _settings("http://user:pass@proxy.br:3128")

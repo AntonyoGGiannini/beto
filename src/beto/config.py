@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -74,10 +74,12 @@ class Settings(BaseSettings):
         if parts.port:
             server += f":{parts.port}"
         proxy: dict[str, str] = {"server": server}
+        # urlsplit não decodifica %XX; o Playwright quer as credenciais já decodificadas
+        # (o httpx recebe a URL inteira e decodifica sozinho).
         if parts.username:
-            proxy["username"] = parts.username
+            proxy["username"] = unquote(parts.username)
         if parts.password:
-            proxy["password"] = parts.password
+            proxy["password"] = unquote(parts.password)
         return proxy
 
     @property

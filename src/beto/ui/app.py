@@ -88,6 +88,7 @@ def _init_state() -> None:
     st.session_state.cfg_max_delay = float(s.request_max_delay_s)
     st.session_state.cfg_headless = bool(s.headless)
     st.session_state.cfg_render_wait = int(s.render_wait_ms)
+    st.session_state.cfg_proxy = s.proxy_server or ""
     st.session_state.cfg_db_path = s.db_path
     st.session_state.cfg_log_level = s.log_level if s.log_level in LOG_LEVELS else "INFO"
     st.session_state.cfg_log_json = bool(s.log_json)
@@ -116,6 +117,7 @@ def _current_values() -> dict[str, object]:
         "request_max_delay_s": ss.cfg_max_delay,
         "headless": ss.cfg_headless,
         "render_wait_ms": ss.cfg_render_wait,
+        "proxy_server": ss.cfg_proxy or "",
         "db_path": ss.cfg_db_path,
         "log_level": ss.cfg_log_level,
         "log_json": ss.cfg_log_json,
@@ -131,6 +133,7 @@ def _build_settings() -> Settings:
     values["telegram_chat_id"] = values["telegram_chat_id"] or None
     if not values["enabled_houses"]:
         values["enabled_houses"] = "mock"
+    values["proxy_server"] = values["proxy_server"] or None
     return Settings(_env_file=None, **values)
 
 
@@ -217,6 +220,17 @@ def _tab_config() -> None:
     with col8:
         st.number_input("Render wait (ms)", min_value=0, step=500, key="cfg_render_wait")
         st.checkbox("Headless", key="cfg_headless")
+
+    st.text_input(
+        "Proxy (opcional)",
+        type="password",
+        key="cfg_proxy",
+        placeholder="http://usuario:senha@host:porta",
+        help=(
+            "Sai por outro IP no httpx e no Playwright. As casas .bet.br geo-bloqueiam "
+            "IPs fora do Brasil — aponte para um proxy residencial BR. Vazio = sem proxy."
+        ),
+    )
 
     with st.expander("Avançado"):
         st.text_input("Caminho do banco (SQLite)", key="cfg_db_path")
