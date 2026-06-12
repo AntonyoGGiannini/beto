@@ -29,9 +29,19 @@ log = structlog.get_logger(__name__)
 PORTAL_BASES = (
     "https://www.sportingbet.bet.br",
     "https://sports.sportingbet.bet.br",
+    "https://m.sportingbet.bet.br",
 )
-CLIENTCONFIG_PATHS = ("/pt-br/api/clientconfig", "/api/clientconfig", "/en/api/clientconfig")
-ACCESS_RX = re.compile(r'"accessId"\s*:\s*"([^"]+)"')
+# Ordem: endpoints JSON dedicados primeiro; homepage/páginas como fallback HTML
+CLIENTCONFIG_PATHS = (
+    "/pt-br/api/clientconfig",
+    "/api/clientconfig",
+    "/en/api/clientconfig",
+    "/",                              # homepage — accessId frequentemente embutido no HTML
+    "/pt-br/sports/futebol",
+    "/apostas-esportivas/futebol",
+)
+# Aceita "accessId": "...", accessId = "..." e accessId:"..." (sem espaços)
+ACCESS_RX = re.compile(r'"accessId"\s*[:=]\s*["\']?([A-Za-z0-9\-_]{8,})["\']?')
 SPORT_ID_FOOTBALL = "4"  # futebol na taxonomia Entain
 
 
