@@ -133,6 +133,43 @@ uv run beto run
 
 ---
 
+## Deploy no Railway (Docker)
+
+O `Dockerfile` já inclui o Chromium do Playwright (`playwright install --with-deps`),
+então as casas que dependem de browser funcionam no container. O Railway detecta o
+`Dockerfile` automaticamente.
+
+**1. Variáveis** (aba *Variables* — **nunca** commite o token):
+
+```
+BETO_ALERTER=telegram
+BETO_TELEGRAM_BOT_TOKEN=<token do @BotFather>
+BETO_TELEGRAM_CHAT_ID=<seu chat_id>
+BETO_ENABLED_HOUSES=betano,sportingbet,novibet,superbet,betfair,betnacional
+```
+
+**2. Interface + alertas 24/7 = dois serviços** do mesmo repositório (compartilham as
+variáveis acima):
+
+| Serviço | Start command | Função |
+|---|---|---|
+| **web** | `uv run beto ui` (padrão do Dockerfile) | Interface Streamlit |
+| **worker** | `uv run beto run` | Monitor contínuo → Telegram |
+
+No serviço **web**, gere um domínio em *Settings → Networking → Generate Domain*.
+
+**3. Dedup persistente no worker**: anexe um *Volume* montado em `/data` e defina
+`BETO_DB_PATH=/data/beto.db` — senão o banco é efêmero e o mesmo alerta repete a cada
+reinício.
+
+> **Geo-bloqueio**: as casas `.bet.br` são do mercado regulado brasileiro e costumam
+> bloquear IPs estrangeiros/de datacenter. O Railway não tem região no Brasil, então a
+> coleta pode falhar com `HTTP 403`/timeout mesmo com o Chromium funcionando. Nesse caso
+> configure `BETO_PROXY_SERVER=http://usuario:senha@host:porta` apontando para um **proxy
+> residencial brasileiro**, ou rode o coletor numa máquina/conexão no Brasil.
+
+---
+
 ## Casas suportadas
 
 | Casa | Estratégia | Status |

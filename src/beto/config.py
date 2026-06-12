@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ALL_HOUSES = [
@@ -46,12 +48,37 @@ class Settings(BaseSettings):
     request_max_delay_s: float = 2.5
     headless: bool = True
     render_wait_ms: int = 8000
+    # proxy opcional p/ httpx e Playwright — ex.: http://user:pass@host:porta
+    # útil para sair por um IP residencial brasileiro (casas .bet.br geo-bloqueiam)
+    proxy_server: str | None = None
 
     db_path: str = "beto.db"
     log_level: str = "INFO"
     log_json: bool = False
     debug_dump: bool = False
     debug_dump_dir: str = "debug"
+
+    @property
+    def playwright_proxy(self) -> dict[str, str] | None:
+        """Converte `proxy_server` (URL com credenciais opcionais) no formato do Playwright.
+
+        O Playwright exige `server` sem credenciais e `username`/`password` à parte;
+        o httpx aceita as credenciais embutidas na URL (usa `proxy_server` direto).
+        """
+        if not self.proxy_server:
+            return None
+        parts = urlsplit(self.proxy_server)
+        if not parts.hostname:
+            return None
+        server = f"{parts.scheme or 'http'}://{parts.hostname}"
+        if parts.port:
+            server += f":{parts.port}"
+        proxy: dict[str, str] = {"server": server}
+        if parts.username:
+            proxy["username"] = parts.username
+        if parts.password:
+            proxy["password"] = parts.password
+        return proxy
 
     @property
     def houses(self) -> list[str]:

@@ -83,6 +83,7 @@ class Transport:
                 http2=True,
                 follow_redirects=True,
                 timeout=self.settings.request_timeout_s,
+                proxy=self.settings.proxy_server or None,
                 headers={
                     "User-Agent": random.choice(USER_AGENTS),
                     "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.6",
@@ -165,12 +166,18 @@ class Transport:
                     ) from exc
                 self._playwright = await async_playwright().start()
                 try:
+                    # --no-sandbox: Chromium recusa rodar como root (container) sem isso.
+                    # --disable-dev-shm-usage: evita travar com /dev/shm pequeno em container.
                     self._browser = await self._playwright.chromium.launch(
-                        headless=self.settings.headless
+                        headless=self.settings.headless,
+                        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+                        proxy=self.settings.playwright_proxy,
                     )
                 except Exception as exc:
                     raise RuntimeError(
-                        f"Chromium indisponível — rode `uv run playwright install chromium` ({exc})"
+                        f"Chromium não iniciou: {exc}. Se disser \"Executable doesn't exist\", "
+                        "rode `uv run playwright install chromium`; em container o --no-sandbox "
+                        "já está aplicado."
                     ) from exc
             return self._browser
 
