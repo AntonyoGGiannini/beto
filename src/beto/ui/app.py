@@ -145,17 +145,15 @@ def _competition_label(settings: Settings) -> str:
 @st.cache_data(ttl=30, show_spinner=False)
 def _playwright_installed() -> bool:
     """Verifica se o Chromium do Playwright está instalado (cache 30 s)."""
-    import subprocess
-    import sys
+    try:
+        from pathlib import Path
 
-    r = subprocess.run(
-        [sys.executable, "-m", "playwright", "install", "--dry-run", "chromium"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    out = (r.stdout + r.stderr).lower()
-    return r.returncode == 0 or "already installed" in out or "browser is already installed" in out
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            return Path(p.chromium.executable_path).exists()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _tab_config() -> None:

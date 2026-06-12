@@ -41,7 +41,7 @@ CLIENTCONFIG_PATHS = (
     "/apostas-esportivas/futebol",
 )
 # Aceita "accessId": "...", accessId = "..." e accessId:"..." (sem espaços)
-ACCESS_RX = re.compile(r'"accessId"\s*[:=]\s*["\']?([A-Za-z0-9\-_]{8,})["\']?')
+ACCESS_RX = re.compile(r'["\']?\baccessId\b["\']?\s*[:=]\s*["\']?([A-Za-z0-9\-_]{8,})["\']?')
 SPORT_ID_FOOTBALL = "4"  # futebol na taxonomia Entain
 
 
