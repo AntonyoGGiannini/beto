@@ -2,14 +2,15 @@
 
 Execute com `beto ui` (ou `streamlit run src/beto/ui/app.py`).
 
-Quatro abas: Configuração (casas, filtros, arbitragem, matching, scraping),
-Coleta (relatório de cobertura), Surebets (detecção numa rodada) e Telegram
-(descobrir chat_id e enviar alerta de teste).
+Cinco abas: Configuração (casas, filtros, arbitragem, matching, scraping),
+Coleta (relatório de cobertura), Surebets (detecção numa rodada), Telegram
+(descobrir chat_id e enviar alerta de teste) e Monitor (loop contínuo ao vivo).
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import streamlit as st
@@ -393,16 +394,95 @@ def _tab_telegram() -> None:
         st.button("Usar este chat_id", on_click=_use_discovered_chat)
 
 
+def _elapsed(started_at: datetime) -> str:
+    secs = int((datetime.now(UTC) - started_at).total_seconds())
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _tab_monitor() -> None:
+    from beto.ui import monitor as mon
+
+    st.caption(
+        "Inicia o loop contínuo de scraping + detecção + alertas — o mesmo que "
+        "`beto run` no terminal, com log ao vivo aqui na tela."
+    )
+
+    state = mon.get_state()
+    running = state is not None and state.running
+
+    col_btn, col_tip = st.columns([1, 3])
+    with col_btn:
+        if not running:
+            if st.button("▶️ Iniciar monitor", type="primary", width="stretch"):
+                settings = _build_settings()
+                setup_logging(settings.log_level, settings.log_json)
+                mon.start(settings)
+                st.rerun()
+        else:
+            if st.button("🛑 Parar monitor", type="secondary", width="stretch"):
+                mon.stop()
+                st.rerun()
+    with col_tip:
+        if not running:
+            st.info(
+                "O monitor roda em segundo plano e continua mesmo que você troque de aba. "
+                "Use a aba **⚙️ Configuração** para escolher as casas e o modo de alerta "
+                "(console ou Telegram) antes de iniciar."
+            )
+        else:
+            st.success(
+                f"Monitor ativo há **{_elapsed(state.started_at)}**. "  # type: ignore[union-attr]
+                "Troque de aba livremente — o log continua acumulando."
+            )
+
+    @st.fragment(run_every="2s" if running else None)
+    def _live() -> None:
+        s = mon.get_state()
+        if s is None:
+            return
+
+        # métricas
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Status", "🟢 ativo" if s.running else "🔴 parado")
+        c2.metric("Ciclos", s.cycles_done)
+        c3.metric("Alertas enviados", s.alerts_sent)
+        c4.metric("Surebets encontradas", s.opps_found)
+
+        if s.started_at:
+            st.caption(f"No ar há {_elapsed(s.started_at)}")
+
+        # log
+        if s.log:
+            last50 = "\n".join(s.log[-50:])
+            st.code(last50, language=None)
+
+        col_clr, _ = st.columns([1, 4])
+        with col_clr:
+            if st.button("🗑️ Limpar log", key="btn_clear_log"):
+                s.log.clear()
+
+    _live()
+
+
 def main() -> None:
     st.set_page_config(page_title="beto — surebets", page_icon="🟢", layout="wide")
     _init_state()
 
     with st.sidebar:
+        from beto.ui import monitor as mon
+
         st.title("🟢 beto")
         st.caption("Detector de surebets entre casas brasileiras.")
         st.metric("Casas ativas", len(st.session_state.cfg_houses))
         st.metric("Lucro mínimo", f"{st.session_state.cfg_min_profit:.2f}%")
         st.metric("Modo de alerta", st.session_state.cfg_alerter)
+        mon_state = mon.get_state()
+        if mon_state and mon_state.running:
+            st.metric("Monitor", f"🟢 ciclo {mon_state.cycles_done}")
+        else:
+            st.metric("Monitor", "🔴 parado")
         st.divider()
         st.caption(
             "⚠️ Uso pessoal/educacional. Scraping pode violar os Termos de Uso das "
@@ -410,8 +490,8 @@ def main() -> None:
         )
 
     st.title("beto — detector de surebets")
-    tab_cfg, tab_collect, tab_scan, tab_tg = st.tabs(
-        ["⚙️ Configuração", "📡 Coleta", "💰 Surebets", "📨 Telegram"]
+    tab_cfg, tab_collect, tab_scan, tab_tg, tab_mon = st.tabs(
+        ["⚙️ Configuração", "📡 Coleta", "💰 Surebets", "📨 Telegram", "🔄 Monitor"]
     )
     with tab_cfg:
         _tab_config()
@@ -421,6 +501,8 @@ def main() -> None:
         _tab_scan()
     with tab_tg:
         _tab_telegram()
+    with tab_mon:
+        _tab_monitor()
 
 
 main()
