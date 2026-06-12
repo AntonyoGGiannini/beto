@@ -1,0 +1,58 @@
+{
+  "fixtures": [
+    {
+      "id": 99001,
+      "name": { "value": "Brasil - México" },
+      "startDate": "2026-06-13T19:00:00Z",
+      "competition": { "name": { "value": "Copa do Mundo FIFA 2026" } },
+      "participants": [
+        { "name": { "value": "Brasil" } },
+        { "name": { "value": "México" } }
+      ],
+      "optionMarkets": [
+        {
+          "name": { "value": "Resultado da partida" },
+          "options": [
+            { "name": { "value": "Brasil" }, "price": { "odds": 2.05 } },
+            { "name": { "value": "X" }, "price": { "odds": 3.25 } },
+            { "name": { "value": "México" }, "price": { "odds": 3.6 } }
+          ]
+        },
+        {
+          "name": { "value": "Total de gols" },
+          "options": [
+            { "name": { "value": "Mais de 2,5" }, "price": { "odds": 1.95 } },
+            { "name": { "value": "Menos de 2,5" }, "price": { "odds": 1.83 } }
+          ]
+        },
+        {
+          "name": { "value": "Total de escanteios" },
+          "options": [
+            { "name": { "value": "Mais de 9,5" }, "price": { "odds": 1.78 } },
+            { "name": { "value": "Menos de 9,5" }, "price": { "odds": 1.92 } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 99002,
+      "name": { "value": "Flamengo - Palmeiras" },
+      "startDate": "2026-06-14T00:00:00Z",
+      "competition": { "name": { "value": "Brasileirão Série A" } },
+      "participants": [
+        { "name": { "value": "Flamengo" } },
+        { "name": { "value": "Palmeiras" } }
+      ],
+      "optionMarkets": [
+        {
+          "name": { "value": "Resultado da partida" },
+          "options": [
+            { "name": { "value": "Flamengo" }, "price": { "odds": 1.9 } },
+            { "name": { "value": "X" }, "price": { "odds": 3.4 } },
+            { "name": { "value": "Palmeiras" }, "price": { "odds": 4.0 } }
+          ]
+        }
+      ]
+    }
+  ]
+}

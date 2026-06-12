@@ -1,1 +1,181 @@
 # beto
+
+Detector de **surebets (arbitragem)** entre casas de apostas brasileiras com alertas no Telegram.
+
+```
+beto collect   # raspa todas as casas e imprime o relatório de cobertura
+beto scan      # coleta + detecta oportunidades de arbitragem
+beto run       # loop contínuo com alertas no Telegram (ou console)
+```
+
+---
+
+## Como funciona
+
+A arbitragem acontece quando, tomando a **melhor odd de cada resultado** entre várias casas, a soma
+dos inversos fica **< 1** — garantindo lucro independente do resultado.
+
+**Exemplo (1X2):** `home 2.10` (betano) + `draw 3.60` (novibet) + `away 4.20` (novibet)
+
+```
+arb_sum = 1/2.10 + 1/3.60 + 1/4.20 ≈ 0.9921  →  lucro ≈ 0,80%
+```
+
+Com bankroll de R$ 1.000: stakes ≈ R$ 480 / R$ 278 / R$ 238; retorno garantido ≈ R$ 1.008.
+
+---
+
+## Instalação
+
+```bash
+# com uv (recomendado)
+pip install uv
+uv sync --extra dev
+
+# instala o Chromium para scrapers com JavaScript
+uv run playwright install chromium
+
+# sem uv
+pip install -e ".[dev]"
+playwright install chromium
+```
+
+Copie `.env.example` para `.env` e configure:
+
+```bash
+cp .env.example .env
+```
+
+---
+
+## Configuração (`.env`)
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `BETO_TELEGRAM_BOT_TOKEN` | — | Token do bot (obrigatório para `beto run`) |
+| `BETO_TELEGRAM_CHAT_ID` | — | ID do chat que recebe os alertas |
+| `BETO_ENABLED_HOUSES` | `["mock"]` | Casas a monitorar (JSON array) |
+| `BETO_SCRAPE_INTERVAL_S` | `60` | Intervalo entre ciclos (segundos) |
+| `BETO_MIN_PROFIT_PCT` | `0.5` | Threshold mínimo de lucro (%) |
+| `BETO_BANKROLL` | `1000.0` | Banca para cálculo de stakes (R$) |
+| `BETO_ALERTER` | `telegram` | `telegram` ou `console` (dry-run) |
+| `BETO_HEADLESS` | `true` | Playwright em modo headless |
+| `BETO_LOG_LEVEL` | `INFO` | Nível de log |
+
+---
+
+## Uso
+
+### Relatório de cobertura
+
+```bash
+uv run beto collect
+uv run beto collect --houses mock betano novibet
+uv run beto collect --houses betano --debug-dump   # salva payloads brutos em debug/
+```
+
+Saída de exemplo:
+
+```
+══════════════════════════════════════════════════════
+ RELATÓRIO DE COBERTURA — Copa do Mundo 2026 — futebol
+══════════════════════════════════════════════════════
+ Casa          Status     Eventos  Quotes  Tempo   Detalhe
+ mock          OK              1       4    0.0s
+ betano        FALHOU          —       —    1.2s   HTTP 403 ao carregar
+ novibet       SEM DADOS       0       0    0.8s
+──────────────────────────────────────────────────────
+ Coletadas: 1/3 — mock
+══════════════════════════════════════════════════════
+```
+
+### Scan (detecta surebets)
+
+```bash
+uv run beto scan
+uv run beto scan --min-profit 0.3 --bankroll 5000
+```
+
+### Loop contínuo
+
+```bash
+# sem Telegram — imprime alertas no terminal
+BETO_ALERTER=console uv run beto run
+
+# com Telegram
+uv run beto run
+```
+
+---
+
+## Casas suportadas
+
+| Casa | Estratégia | Status |
+|---|---|---|
+| **mock** | Dados sintéticos | Sempre funciona (teste de pipeline) |
+| **betano** | httpx → endpoint JSON interno (Kaizen) | Implementado |
+| **sportingbet** | httpx → CDS API (Entain) | Implementado |
+| **novibet** | Playwright + colheitadeira heurística | Implementado |
+| **superbet** | Playwright + colheitadeira heurística | Implementado |
+| **betfair** | Playwright + colheitadeira heurística | Implementado |
+| **betnacional** | Playwright + colheitadeira heurística | Implementado |
+| **bet365** | — | Stub — Cloudflare avançado; fase posterior |
+
+> Os endpoints internos de cada casa podem mudar sem aviso e são re-descobertos via
+> `beto collect --debug-dump`. O `MockScraper` sempre garante que o restante do pipeline
+> (matching, arbitragem, alertas) funcione independentemente dos scrapers reais.
+
+---
+
+## Mercados
+
+| Mercado | MarketType | Linha |
+|---|---|---|
+| Resultado (1X2) | `MATCH_1X2` | — |
+| Over/Under Gols | `OU_GOALS` | 0.5, 1.5, 2.5, … |
+| Over/Under Escanteios | `OU_CORNERS` | 8.5, 9.5, … |
+
+A arbitragem em O/U exige a **mesma linha** em casas diferentes (over em uma, under em outra).
+
+---
+
+## Manutenção de scrapers
+
+Quando um scraper parar de coletar:
+
+1. Rode `beto collect --houses <casa> --debug-dump` para salvar o payload bruto em `debug/<casa>/`.
+2. Abra o arquivo e procure os campos de odds — a colheitadeira heurística (`scrapers/harvest.py`)
+   tenta reconhecê-los automaticamente.
+3. Se o shape mudou, ajuste as palavras-chave em `harvest.py` ou implemente um parser dedicado
+   seguindo o padrão de `scrapers/sportingbet.py`.
+4. Adicione um fixture em `tests/fixtures/` e um teste em `tests/test_scraper_<casa>.py`.
+
+---
+
+## Testes
+
+```bash
+uv run pytest -v
+uv run pytest --cov=beto --cov-report=term-missing
+```
+
+Todos os testes são **offline** — nenhum acessa a rede. Os scrapers reais são testados contra
+fixtures JSON salvas em `tests/fixtures/`.
+
+```bash
+uv run ruff check src tests
+uv run mypy src
+```
+
+---
+
+## Aviso legal
+
+> **Este projeto é para uso pessoal e educacional.**
+>
+> - O scraping provavelmente **viola os Termos de Uso** das casas de apostas. Use com moderação
+>   (rate-limit, delays, baixa frequência) e por sua própria conta e risco.
+> - As casas de apostas costumam **limitar ou banir contas** suspeitas de arbitragem.
+> - Os alertas são **indicações, não garantias**: odds mudam em segundos e a execução depende de
+>   você. Sempre confirme as odds antes de apostar.
+> - Não é conselho financeiro. Verifique a legalidade na sua jurisdição.

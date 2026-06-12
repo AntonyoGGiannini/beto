@@ -1,0 +1,34 @@
+{
+  "data": {
+    "blocks": [
+      {
+        "name": "Copa do Mundo 2026",
+        "events": [
+          {
+            "id": "ev-arg-chi",
+            "name": "Argentina - Chile",
+            "startTime": 1781467200000,
+            "leagueName": "Copa do Mundo 2026",
+            "markets": [
+              {
+                "name": "Resultado Final",
+                "selections": [
+                  { "name": "Argentina", "price": 1.65 },
+                  { "name": "Empate", "price": 3.9 },
+                  { "name": "Chile", "price": 5.5 }
+                ]
+              },
+              {
+                "name": "Total de Gols",
+                "selections": [
+                  { "name": "Mais de 2.5", "price": 2.02 },
+                  { "name": "Menos de 2.5", "price": 1.78 }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
