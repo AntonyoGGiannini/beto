@@ -58,6 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _launch_ui(port: int) -> None:
     import importlib.util
+    import os
     import subprocess
     from pathlib import Path
 
@@ -66,9 +67,16 @@ def _launch_ui(port: int) -> None:
             "Streamlit não está instalado. Rode `uv sync --extra ui` "
             "(ou `pip install 'beto[ui]'`) e tente de novo."
         )
+    # Railway/Render/Fly.io injetam PORT; respeita se o usuário não passou --port explícito
+    effective_port = int(os.environ.get("PORT", port))
     app_path = Path(__file__).resolve().parent / "ui" / "app.py"
     subprocess.run(  # noqa: S603 — argumentos fixos, sem entrada do usuário no shell
-        [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)],
+        [
+            sys.executable, "-m", "streamlit", "run", str(app_path),
+            "--server.port", str(effective_port),
+            "--server.address", "0.0.0.0",
+            "--server.headless", "true",
+        ],
         check=False,
     )
 
