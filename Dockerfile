@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir uv
 WORKDIR /app
 
 # Camadas de cache: dependências antes do código-fonte
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --extra ui --no-dev
 
 # Chromium + todas as libs de sistema que ele precisa
