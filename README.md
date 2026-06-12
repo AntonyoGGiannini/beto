@@ -3,6 +3,7 @@
 Detector de **surebets (arbitragem)** entre casas de apostas brasileiras com alertas no Telegram.
 
 ```
+beto ui        # interface web (Streamlit): configuração, coleta, surebets, Telegram
 beto collect   # raspa todas as casas e imprime o relatório de cobertura
 beto scan      # coleta + detecta oportunidades de arbitragem
 beto run       # loop contínuo com alertas no Telegram (ou console)
@@ -63,6 +64,30 @@ cp .env.example .env
 | `BETO_LOG_LEVEL` | `INFO` | Nível de log |
 
 ---
+
+## Interface web (Streamlit)
+
+Toda a plataforma também pode ser operada por uma interface gráfica:
+
+```bash
+uv sync --extra ui          # instala o Streamlit
+uv run beto ui              # abre em http://localhost:8501
+# ou: uv run beto ui --port 8600
+```
+
+Quatro abas:
+
+| Aba | O que faz |
+|---|---|
+| **⚙️ Configuração** | Liga/desliga casas, edita filtros de competição, arbitragem (lucro mínimo, banca), matching (limiar fuzzy, janela), scraping (delays, headless) e salva tudo em `.env` |
+| **📡 Coleta** | Roda uma coleta e mostra o relatório de cobertura (casa · status · eventos · quotes · tempo) |
+| **💰 Surebets** | Coleta + detecta arbitragem e lista cada oportunidade com lucro %, odds e distribuição de stakes |
+| **📨 Telegram** | Descobre o `chat_id` (via `getUpdates`), envia um alerta de teste e escolhe o modo de alerta |
+
+> A interface é a fonte de verdade durante a interação; o botão **Salvar em .env**
+> persiste a configuração. Para scraping com Playwright (casas JS-pesadas) a CLI
+> `beto collect` é mais robusta; a interface funciona bem para configuração, `mock`
+> e casas via httpx (betano, sportingbet).
 
 ## Uso
 

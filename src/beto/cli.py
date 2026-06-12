@@ -50,7 +50,27 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="força alertas no console (ignora Telegram)",
     )
+
+    p_ui = sub.add_parser("ui", help="abre a interface web (Streamlit)")
+    p_ui.add_argument("--port", type=int, default=8501, help="porta do servidor (padrão 8501)")
     return parser
+
+
+def _launch_ui(port: int) -> None:
+    import importlib.util
+    import subprocess
+    from pathlib import Path
+
+    if importlib.util.find_spec("streamlit") is None:
+        raise SystemExit(
+            "Streamlit não está instalado. Rode `uv sync --extra ui` "
+            "(ou `pip install 'beto[ui]'`) e tente de novo."
+        )
+    app_path = Path(__file__).resolve().parent / "ui" / "app.py"
+    subprocess.run(  # noqa: S603 — argumentos fixos, sem entrada do usuário no shell
+        [sys.executable, "-m", "streamlit", "run", str(app_path), "--server.port", str(port)],
+        check=False,
+    )
 
 
 def _settings_from(args: argparse.Namespace) -> Settings:
@@ -68,6 +88,11 @@ def _settings_from(args: argparse.Namespace) -> Settings:
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
+
+    if args.command == "ui":
+        _launch_ui(args.port)
+        return
+
     settings = _settings_from(args)
     setup_logging(settings.log_level, settings.log_json)
     houses = (
