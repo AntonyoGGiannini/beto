@@ -142,7 +142,35 @@ def _competition_label(settings: Settings) -> str:
 # --------------------------------------------------------------------------- #
 # Abas
 # --------------------------------------------------------------------------- #
+@st.cache_data(ttl=30, show_spinner=False)
+def _playwright_installed() -> bool:
+    """Verifica se o Chromium do Playwright está instalado (cache 30 s)."""
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [sys.executable, "-m", "playwright", "install", "--dry-run", "chromium"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    out = (r.stdout + r.stderr).lower()
+    return r.returncode == 0 or "already installed" in out or "browser is already installed" in out
+
+
 def _tab_config() -> None:
+    # aviso proativo se Chromium não estiver instalado
+    try:
+        pw_ok = _playwright_installed()
+    except Exception:  # noqa: BLE001
+        pw_ok = True  # não travar a UI se a verificação falhar
+    if not pw_ok:
+        st.warning(
+            "**Playwright Chromium não encontrado.** As casas Novibet, Superbet, Betfair, "
+            "Betnacional e bet365 precisam dele para funcionar. Rode no terminal:\n\n"
+            "```\nuv run playwright install chromium\n```"
+        )
+
     st.subheader("Casas")
     st.multiselect(
         "Casas a monitorar",
@@ -380,7 +408,14 @@ def _tab_telegram() -> None:
                     send_alert(token, chat_id, demo_opportunity(st.session_state.cfg_bankroll))
                     st.success("Alerta de teste enviado! Confira o Telegram.")
                 except Exception as exc:  # noqa: BLE001 — mostrar a falha na UI
-                    st.error(f"Falhou: {type(exc).__name__}: {exc}")
+                    msg = str(exc)
+                    st.error(msg)
+                    if "400" in msg or "/start" in msg:
+                        st.info(
+                            "**Como resolver:** abra o Telegram, procure seu bot pelo "
+                            "username (ex: `@meu_bot`) e envie `/start`. "
+                            "Depois clique em **🔎 Descobrir chat_id** acima."
+                        )
 
     discovered = st.session_state.get("discovered")
     if discovered:
