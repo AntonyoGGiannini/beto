@@ -9,16 +9,20 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-# Camadas de cache: dependências antes do código-fonte
+# 1) Só as dependências (camada cacheável). --no-install-project pula a build do
+#    pacote `beto`, que exigiria README.md/src ainda não copiados.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --extra ui --no-dev
+RUN uv sync --no-install-project --extra ui --no-dev
 
-# Chromium + todas as libs de sistema que ele precisa
-RUN uv run playwright install chromium --with-deps
+# 2) Chromium + libs de sistema na mesma camada de deps (cacheável). Usa o binário
+#    do venv direto — `uv run` tentaria sincronizar o projeto (ainda não copiado).
+RUN .venv/bin/playwright install chromium --with-deps
 
-# Código-fonte
+# 3) Código-fonte, README (referenciado em pyproject) e config; instala o projeto
+COPY README.md ./
 COPY src/ src/
 COPY .streamlit/ .streamlit/
+RUN uv sync --extra ui --no-dev
 
 # Railway/Render/Fly.io expõem a porta via $PORT; fallback 8501
 ENV PORT=8501 \
@@ -26,7 +30,7 @@ ENV PORT=8501 \
 
 EXPOSE 8501
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s \
     CMD curl -f http://localhost:${PORT}/_stcore/health || exit 1
 
 CMD ["uv", "run", "beto", "ui"]
