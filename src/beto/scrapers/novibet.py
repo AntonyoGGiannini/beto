@@ -14,6 +14,8 @@ class NovibetScraper(RenderHarvestScraper):
     house = "novibet"
     note = "render+colheita (endpoint não mapeado)"
     url_candidates = (
+        # TODO: id de evento fixo — vale só como teste, expira quando o jogo passar
+        "https://www.novibet.bet.br/apostas-esportivas/popular/5197417/world-cup-2026/world-cup-2026/7079496",
         "https://www.novibet.bet.br/apostas-esportivas/futebol/copa-do-mundo",
         "https://www.novibet.bet.br/apostas-esportivas/futebol",
         "https://www.novibet.bet.br/",
