@@ -15,7 +15,7 @@ def format_coverage_report(results: list[ScrapeResult], *, competition_label: st
     headers = ("casa", "status", "eventos", "quotes", "tempo", "detalhe")
     rows: list[tuple[str, ...]] = []
     for r in sorted(results, key=lambda x: (x.ok, x.house), reverse=True):
-        detail = r.error or r.note or "-"
+        detail = r.detail
         rows.append(
             (
                 r.house,
@@ -27,13 +27,17 @@ def format_coverage_report(results: list[ScrapeResult], *, competition_label: st
             )
         )
 
+    last = len(headers) - 1
     widths = [
         min(max(len(headers[i]), *(len(row[i]) for row in rows)), 72) if rows else len(headers[i])
         for i in range(len(headers))
     ]
 
     def fmt(row: tuple[str, ...]) -> str:
-        return "  ".join(cell[: widths[i]].ljust(widths[i]) for i, cell in enumerate(row))
+        # a última coluna (detalhe/diagnóstico) nunca é truncada — é onde está a dica
+        cells = [cell[: widths[i]].ljust(widths[i]) for i, cell in enumerate(row[:last])]
+        cells.append(row[last])
+        return "  ".join(cells)
 
     collected = [r.house for r in results if r.ok and r.quotes]
     lines = [

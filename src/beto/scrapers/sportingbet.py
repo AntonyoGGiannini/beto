@@ -22,7 +22,7 @@ import structlog
 from beto.models import OddsQuote, Sport
 from beto.scrapers.base import BookmakerScraper
 from beto.scrapers.common import matches_competition, parse_start_time, to_odds
-from beto.scrapers.harvest import RawSelection, classify_market, harvest_many, map_market
+from beto.scrapers.harvest import RawSelection, classify_market, harvest_report, map_market
 
 log = structlog.get_logger(__name__)
 
@@ -144,6 +144,7 @@ class SportingbetScraper(BookmakerScraper):
                 except httpx.HTTPError as exc:
                     errors.append(f"{base + path} → {type(exc).__name__}")
                     continue
+                self.diag.fetched_bytes += len(text)
                 m = ACCESS_RX.search(text)
                 if m:
                     return base, m.group(1)
@@ -167,16 +168,23 @@ class SportingbetScraper(BookmakerScraper):
         data = await self.transport.get_json(
             f"{base}/cds-api/bettingoffer/fixtures", params=params, tag=self.house
         )
+        self.diag.http_status = 200
+        self.diag.payloads = 1
         quotes = parse_cds_fixtures(
             data, house=self.house, include=settings.includes, exclude=settings.excludes
         )
-        if not quotes:  # shape mudou? tenta a colheitadeira genérica
-            quotes = harvest_many(
-                [data],
-                house=self.house,
-                include=settings.includes,
-                exclude=settings.excludes,
-            )
-            if quotes:
-                log.warning("sportingbet.dedicated_parser_empty_fallback_harvest")
-        return quotes
+        if quotes:
+            self.diag.parser = "cds"
+            return quotes
+
+        # shape mudou? tenta a colheitadeira genérica (diagnosticada)
+        report = harvest_report(
+            [data], house=self.house, include=settings.includes, exclude=settings.excludes
+        )
+        self.diag.raw_events = report.raw_events
+        self.diag.in_scope = report.in_scope
+        self.diag.markets = report.markets
+        if report.quotes:
+            self.diag.parser = "harvest"
+            log.warning("sportingbet.dedicated_parser_empty_fallback_harvest")
+        return report.quotes
