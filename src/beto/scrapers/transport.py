@@ -242,7 +242,7 @@ class Transport:
         digest = hashlib.sha1(url.encode()).hexdigest()[:10]
         slug = "".join(c if c.isalnum() else "-" for c in urlsplit(url).path)[-60:]
         (d / f"{slug or 'root'}-{digest}.{ext}").write_text(
-            f"<!-- {url} -->\n{body}" if ext == "html" else body
+            f"<!-- {url} -->\n{body}" if ext == "html" else body, encoding="utf-8"
         )
 
     async def aclose(self) -> None:
