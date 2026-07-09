@@ -31,6 +31,22 @@ from beto.config import Settings
 
 log = structlog.get_logger(__name__)
 
+# seletores de "aceitar todos" dos CMPs de cookies mais comuns em sites BR
+# (Cookiebot, OneTrust, textos genéricos em pt/en) — best-effort, uma tentativa só
+_COOKIE_ACCEPT_SELECTOR = ", ".join(
+    (
+        "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+        "#CybotCookiebotDialogBodyButtonAccept",
+        "#onetrust-accept-btn-handler",
+        "button:has-text('Aceitar todos')",
+        "button:has-text('Aceitar tudo')",
+        "button:has-text('Aceitar')",
+        "button:has-text('Concordo')",
+        "button:has-text('Accept all')",
+        "button:has-text('Accept')",
+    )
+)
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36",
@@ -218,6 +234,8 @@ class Transport:
             if main is not None and main.status >= 400:
                 # falha rápida e honesta: é bloqueio/erro do site, não parser
                 raise RuntimeError(f"HTTP {main.status} ao carregar a página")
+            with contextlib.suppress(Exception):
+                await page.locator(_COOKIE_ACCEPT_SELECTOR).first.click(timeout=4_000)
             if wait_selector:
                 with contextlib.suppress(Exception):
                     await page.wait_for_selector(wait_selector, timeout=10_000)
