@@ -102,17 +102,23 @@ uv run beto collect --houses betano --debug-dump   # salva payloads brutos em de
 Saída de exemplo:
 
 ```
-══════════════════════════════════════════════════════
- RELATÓRIO DE COBERTURA — Copa do Mundo 2026 — futebol
-══════════════════════════════════════════════════════
- Casa          Status     Eventos  Quotes  Tempo   Detalhe
- mock          OK              1       4    0.0s
- betano        FALHOU          —       —    1.2s   HTTP 403 ao carregar
- novibet       SEM DADOS       0       0    0.8s
-──────────────────────────────────────────────────────
- Coletadas: 1/3 — mock
-══════════════════════════════════════════════════════
+RELATÓRIO DE COBERTURA — Copa do Mundo 2026 — futebol
+mercados: 1X2 · O/U gols · O/U escanteios
+
+casa      status     eventos  quotes  tempo  detalhe
+--------  ---------  -------  ------  -----  --------------------------------------------------
+mock      OK              1       4   0.0s   dados fictícios (teste do pipeline)
+betano    FALHOU          0       0   1.2s   HTTP 403 ao carregar
+betfair   SEM DADOS       0       0   0.8s   40 evento(s), 0 na competição — relaxe BETO_COMPETITION_INCLUDE
+novibet   SEM DADOS       0       0   0.9s   resposta sem JSON reconhecível (bloqueio ou HTML puro)
+
+Coletadas: 1/4 — mock
 ```
+
+> A coluna **detalhe** é um diagnóstico do funil da coleta (bytes → payloads → eventos →
+> em-escopo → mercados → quotes): quando uma casa dá `SEM DADOS`, ela aponta **em qual
+> estágio** os eventos se perderam — bloqueio, shape novo do payload, filtro de competição
+> restritivo demais ou mercado-alvo não reconhecido — em vez de deixar você no escuro.
 
 ### Scan (detecta surebets)
 
@@ -203,13 +209,22 @@ A arbitragem em O/U exige a **mesma linha** em casas diferentes (over em uma, un
 
 ## Manutenção de scrapers
 
-Quando um scraper parar de coletar:
+Cada casa segue o padrão **parser dedicado + fallback heurístico**, tudo diagnosticado:
+o adaptador tenta primeiro um parser específico da plataforma (`parse_kaizen` na Betano,
+`parse_cds_fixtures` na Sportingbet) e, se ele não render nada, cai na colheitadeira
+genérica (`scrapers/harvest.py`) — preenchendo o funil de diagnóstico no caminho.
+
+Quando um scraper parar de coletar, **leia primeiro a coluna `detalhe`** do relatório —
+ela diz em qual estágio o funil secou. Depois:
 
 1. Rode `beto collect --houses <casa> --debug-dump` para salvar o payload bruto em `debug/<casa>/`.
-2. Abra o arquivo e procure os campos de odds — a colheitadeira heurística (`scrapers/harvest.py`)
-   tenta reconhecê-los automaticamente.
-3. Se o shape mudou, ajuste as palavras-chave em `harvest.py` ou implemente um parser dedicado
-   seguindo o padrão de `scrapers/sportingbet.py`.
+2. Cruze o diagnóstico com o dump:
+   - *"resposta sem JSON reconhecível"* → bloqueio/geo ou o site mudou para HTML puro (veja proxy BR).
+   - *"nenhum evento reconhecido (shape novo?)"* → o formato do payload mudou; ajuste o parser dedicado.
+   - *"0 na competição"* → o filtro `BETO_COMPETITION_INCLUDE` está restritivo demais para o momento.
+   - *"nenhum mercado-alvo reconhecido"* → adicione palavras-chave em `MARKET_KEYWORDS` (`harvest.py`).
+3. Se o shape mudou, ajuste o parser dedicado (padrão de `scrapers/betano.py`/`sportingbet.py`)
+   ou as palavras-chave em `harvest.py`.
 4. Adicione um fixture em `tests/fixtures/` e um teste em `tests/test_scraper_<casa>.py`.
 
 ---

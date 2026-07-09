@@ -2,9 +2,13 @@
 
 As casas devolvem JSONs internos com formatos diferentes mas estrutura parecida:
 eventos com dois participantes, hora de início e mercados com seleções precificadas.
-Este módulo varre recursivamente qualquer payload e extrai `OddsQuote`s dos mercados
-reconhecidos (1X2, O/U gols, O/U escanteios). É a estratégia padrão dos adaptadores
-cujo endpoint interno ainda não foi mapeado à mão — e o fallback dos demais.
+Este módulo varre qualquer payload de forma **event-centric**: primeiro localiza os
+nós que parecem eventos (dois times + hora/mercados), depois colhe os mercados-alvo
+(1X2, O/U gols, O/U escanteios) dentro de cada um. É a estratégia padrão dos
+adaptadores cujo endpoint interno ainda não foi mapeado à mão — e o fallback dos demais.
+
+Além das quotes, devolve um `HarvestReport` com o funil (eventos → em-escopo →
+mercados → quotes) que alimenta o diagnóstico de "SEM DADOS".
 
 Filosofia: conservador. Mercado ambíguo (1º tempo, handicap, time da casa, etc.) é
 descartado; um arb perdido custa menos que um alerta errado.
@@ -14,7 +18,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -67,7 +72,7 @@ PRICE_KEYS = (
     "k",
     "o",
 )
-TEAM_LIST_KEYS = ("participants", "competitors", "teams", "opponents")
+TEAM_LIST_KEYS = ("participants", "competitors", "teams", "opponents", "runners")
 HOME_KEYS = ("homeTeam", "home_team", "homeName", "localTeam", "team1", "home")
 AWAY_KEYS = ("awayTeam", "away_team", "awayName", "visitorTeam", "team2", "away")
 START_KEYS = (
@@ -93,10 +98,11 @@ LEAGUE_KEYS = (
     "tournament",
     "championship",
     "category",
+    "group",
 )
 ID_KEYS = ("eventId", "fixtureId", "matchId", "id")
-_SEPARATORS = (" - ", " x ", " vs. ", " vs ", " v ", " — ")
-_MARKET_CONTAINER_KEYS = ("markets", "optionMarkets", "games", "marketGroups")
+_SEPARATORS = (" - ", " x ", " vs. ", " vs ", " v ", " — ", " @ ")
+MARKET_CONTAINER_KEYS = ("markets", "optionMarkets", "games", "marketGroups", "bettingMarkets")
 
 MARKET_KEYWORDS: dict[MarketType, tuple[str, ...]] = {
     MarketType.OU_CORNERS: (
@@ -137,7 +143,7 @@ REJECT_WORDS = (
     "tempo",  # pega "1º tempo" / "segundo tempo"
     "intervalo",
     "half",
-    "ht",
+    "ht ",
     "asiatic",
     "asian",
     "empate anula",
@@ -180,11 +186,25 @@ class RawSelection:
 
 @dataclass(slots=True)
 class EventCtx:
-    home: str | None = None
-    away: str | None = None
+    home: str
+    away: str
     start: datetime | None = None
     league: str | None = None
     source_id: str | None = None
+
+    def key(self) -> tuple[str, str, str]:
+        day = self.start.date().isoformat() if self.start else "?"
+        return (norm_text(self.home), norm_text(self.away), day)
+
+
+@dataclass(slots=True)
+class HarvestReport:
+    """Quotes + funil da colheita (para diagnóstico do 'SEM DADOS')."""
+
+    quotes: list[OddsQuote] = field(default_factory=list)
+    raw_events: int = 0   # eventos candidatos distintos
+    in_scope: int = 0     # eventos que passaram no filtro de competição
+    markets: int = 0      # mercados-alvo reconhecidos
 
 
 def _unwrap(v: Any) -> Any:
@@ -246,9 +266,7 @@ def _name_of(v: Any) -> str | None:
 
 
 def _looks_like_event(node: dict[str, Any]) -> bool:
-    return any(k in node for k in START_KEYS) or any(
-        k in node for k in _MARKET_CONTAINER_KEYS
-    )
+    return any(k in node for k in START_KEYS) or any(k in node for k in MARKET_CONTAINER_KEYS)
 
 
 def _teams_from(node: dict[str, Any]) -> tuple[str, str] | None:
@@ -265,46 +283,100 @@ def _teams_from(node: dict[str, Any]) -> tuple[str, str] | None:
                     a, b = _name_of(node[hk]), _name_of(node[ak])
                     if a and b and a != b:
                         return a, b
-    # último recurso: "Brasil - México" no nome do evento (só se o nó parece evento)
-    if _looks_like_event(node):
-        name = _get_name(node)
-        if name:
-            for sep in _SEPARATORS:
-                if sep in name:
-                    a, b = (p.strip() for p in name.split(sep, 1))
-                    if len(a) > 1 and len(b) > 1:
-                        return a, b
+    # último recurso: "Brasil - México" no nome do evento
+    name = _get_name(node)
+    if name:
+        for sep in _SEPARATORS:
+            if sep in name:
+                a, b = (p.strip() for p in name.split(sep, 1))
+                if len(a) > 1 and len(b) > 1 and norm_text(a) != norm_text(b):
+                    return a, b
     return None
 
 
-def _event_from_stack(stack: list[dict[str, Any]]) -> EventCtx:
-    ctx = EventCtx()
-    for node in reversed(stack[:-1]):  # exclui o próprio nó do mercado
-        if ctx.home is None:
+def _resolve_league(node: dict[str, Any], ancestors: list[dict[str, Any]]) -> str | None:
+    for source in (node, *reversed(ancestors)):
+        for k in LEAGUE_KEYS:
+            name = _name_of(source.get(k))
+            if name:
+                return name
+    return None
+
+
+def _resolve_start(node: dict[str, Any]) -> datetime | None:
+    for k in START_KEYS:
+        if k in node:
+            dt = parse_start_time(_unwrap(node[k]))
+            if dt:
+                return dt
+    return None
+
+
+def _resolve_source_id(node: dict[str, Any]) -> str | None:
+    for k in ID_KEYS:
+        v = _unwrap(node.get(k))
+        if isinstance(v, str | int):
+            return str(v)
+    return None
+
+
+def _iter_events(
+    payload: Any, assume_competition: str | None
+) -> Iterator[tuple[dict[str, Any], EventCtx]]:
+    """Percorre o payload e emite (nó do evento, contexto) para cada evento distinto.
+
+    Ao reconhecer um evento (dois times + cara de evento) NÃO desce mais em busca de
+    outros eventos ali dentro — mas os mercados desse evento são varridos por
+    `_iter_markets`. Isso dá contagens limpas e evita eventos aninhados fantasmas.
+    """
+
+    def walk(node: Any, ancestors: list[dict[str, Any]]) -> Iterator[tuple[dict, EventCtx]]:
+        if isinstance(node, dict):
             teams = _teams_from(node)
-            if teams:
-                ctx.home, ctx.away = teams
-                for k in ID_KEYS:
-                    v = _unwrap(node.get(k))
-                    if isinstance(v, str | int):
-                        ctx.source_id = str(v)
-                        break
-        if ctx.start is None:
-            for k in START_KEYS:
-                if k in node:
-                    ctx.start = parse_start_time(_unwrap(node[k]))
-                    if ctx.start:
-                        break
-        if ctx.league is None:
-            for k in LEAGUE_KEYS:
-                v = node.get(k)
-                name = _name_of(v)
-                if name:
-                    ctx.league = name
-                    break
-        if ctx.home and ctx.start and ctx.league:
-            break
-    return ctx
+            if teams and _looks_like_event(node):
+                home, away = teams
+                yield node, EventCtx(
+                    home=home,
+                    away=away,
+                    start=_resolve_start(node),
+                    league=_resolve_league(node, ancestors) or assume_competition,
+                    source_id=_resolve_source_id(node),
+                )
+                return  # não desce: já é um evento
+            ancestors.append(node)
+            for v in node.values():
+                yield from walk(v, ancestors)
+            ancestors.pop()
+        elif isinstance(node, list):
+            for item in node:
+                yield from walk(item, ancestors)
+
+    yield from walk(payload, [])
+
+
+def _iter_markets(node: Any) -> Iterator[tuple[str, MarketType, list[RawSelection]]]:
+    """Dentro do subárvore de um evento, emite (nome, tipo, seleções) dos mercados-alvo."""
+    seen_names: set[str] = set()
+
+    def walk(n: Any) -> Iterator[tuple[str, MarketType, list[RawSelection]]]:
+        if isinstance(n, dict):
+            name = _get_name(n)
+            if name:
+                mtype = classify_market(name)
+                if mtype is not None:
+                    sels = _extract_selections(n)
+                    if sels:
+                        marker = f"{mtype}:{norm_text(name)}"
+                        if marker not in seen_names:
+                            seen_names.add(marker)
+                            yield name, mtype, sels
+            for v in n.values():
+                yield from walk(v)
+        elif isinstance(n, list):
+            for item in n:
+                yield from walk(item)
+
+    yield from walk(node)
 
 
 def _similar(a: str, b: str) -> bool:
@@ -369,6 +441,62 @@ def map_market(
     return out
 
 
+def harvest_report(
+    payloads: list[Any],
+    *,
+    house: str,
+    include: list[str],
+    exclude: list[str],
+    assume_competition: str | None = None,
+    url: str | None = None,
+    scraped_at: datetime | None = None,
+) -> HarvestReport:
+    """Varre payloads JSON e devolve quotes + funil de diagnóstico, deduplicando."""
+    scraped_at = scraped_at or datetime.now(UTC)
+    report = HarvestReport()
+    seen_events: set[tuple[str, str, str]] = set()
+    seen_scope: set[tuple[str, str, str]] = set()
+    seen_quotes: set[tuple[Any, ...]] = set()
+
+    for payload in payloads:
+        for node, ctx in _iter_events(payload, assume_competition):
+            ekey = ctx.key()
+            if ekey not in seen_events:
+                seen_events.add(ekey)
+                report.raw_events += 1
+            if not matches_competition(ctx.league, include, exclude):
+                continue
+            if ekey not in seen_scope:
+                seen_scope.add(ekey)
+                report.in_scope += 1
+            for mname, mtype, sels in _iter_markets(node):
+                mapped = map_market(mtype, sels, mname, ctx.home, ctx.away)
+                if mapped:
+                    report.markets += 1
+                for line, outs in mapped:
+                    qkey = (*ekey, mtype, line)
+                    if qkey in seen_quotes:
+                        continue
+                    seen_quotes.add(qkey)
+                    report.quotes.append(
+                        OddsQuote(
+                            house=house,
+                            sport=Sport.FOOTBALL,
+                            league=ctx.league,
+                            home_team=ctx.home,
+                            away_team=ctx.away,
+                            start_time=ctx.start,
+                            market_type=mtype,
+                            line=line,
+                            outcomes=outs,
+                            scraped_at=scraped_at,
+                            source_event_id=ctx.source_id,
+                            url=url,
+                        )
+                    )
+    return report
+
+
 def harvest_payload(
     payload: Any,
     *,
@@ -379,66 +507,16 @@ def harvest_payload(
     url: str | None = None,
     scraped_at: datetime | None = None,
 ) -> list[OddsQuote]:
-    """Varre um payload JSON e devolve quotes dos mercados reconhecidos.
-
-    `assume_competition` é usada quando a página de origem já é específica da
-    competição e o payload não traz o nome da liga.
-    """
-    scraped_at = scraped_at or datetime.now(UTC)
-    found: list[OddsQuote] = []
-    seen: set[tuple[Any, ...]] = set()
-
-    def visit(node: Any, stack: list[dict[str, Any]]) -> None:
-        if isinstance(node, dict):
-            stack.append(node)
-            name = _get_name(node)
-            mtype = classify_market(name) if name else None
-            if mtype is not None and name is not None:
-                sels = _extract_selections(node)
-                if sels:
-                    ctx = _event_from_stack(stack)
-                    league = ctx.league or assume_competition
-                    if (
-                        ctx.home
-                        and ctx.away
-                        and matches_competition(league, include, exclude)
-                    ):
-                        for line, outs in map_market(mtype, sels, name, ctx.home, ctx.away):
-                            key = (
-                                norm_text(ctx.home),
-                                norm_text(ctx.away),
-                                mtype,
-                                line,
-                                ctx.start.date().isoformat() if ctx.start else None,
-                            )
-                            if key in seen:
-                                continue
-                            seen.add(key)
-                            found.append(
-                                OddsQuote(
-                                    house=house,
-                                    sport=Sport.FOOTBALL,
-                                    league=league,
-                                    home_team=ctx.home,
-                                    away_team=ctx.away,
-                                    start_time=ctx.start,
-                                    market_type=mtype,
-                                    line=line,
-                                    outcomes=outs,
-                                    scraped_at=scraped_at,
-                                    source_event_id=ctx.source_id,
-                                    url=url,
-                                )
-                            )
-            for v in node.values():
-                visit(v, stack)
-            stack.pop()
-        elif isinstance(node, list):
-            for item in node:
-                visit(item, stack)
-
-    visit(payload, [])
-    return found
+    """Compat: colhe um único payload e devolve só as quotes."""
+    return harvest_report(
+        [payload],
+        house=house,
+        include=include,
+        exclude=exclude,
+        assume_competition=assume_competition,
+        url=url,
+        scraped_at=scraped_at,
+    ).quotes
 
 
 def harvest_many(
@@ -450,28 +528,15 @@ def harvest_many(
     assume_competition: str | None = None,
     url: str | None = None,
 ) -> list[OddsQuote]:
-    """Aplica `harvest_payload` a vários payloads, deduplicando entre eles."""
-    scraped_at = datetime.now(UTC)
-    merged: dict[tuple[Any, ...], OddsQuote] = {}
-    for payload in payloads:
-        for q in harvest_payload(
-            payload,
-            house=house,
-            include=include,
-            exclude=exclude,
-            assume_competition=assume_competition,
-            url=url,
-            scraped_at=scraped_at,
-        ):
-            key = (
-                norm_text(q.home_team),
-                norm_text(q.away_team),
-                q.market_type,
-                q.line,
-                q.start_time.date().isoformat() if q.start_time else None,
-            )
-            merged.setdefault(key, q)
-    return list(merged.values())
+    """Compat: colhe vários payloads e devolve só as quotes (deduplicadas)."""
+    return harvest_report(
+        payloads,
+        house=house,
+        include=include,
+        exclude=exclude,
+        assume_competition=assume_competition,
+        url=url,
+    ).quotes
 
 
 _SCRIPT_RX = re.compile(r"<script[^>]*>(.*?)</script>", re.S | re.I)
