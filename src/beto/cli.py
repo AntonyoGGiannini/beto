@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 
 from beto.config import Settings
@@ -53,6 +54,43 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_ui = sub.add_parser("ui", help="abre a interface web (Streamlit)")
     p_ui.add_argument("--port", type=int, default=8501, help="porta do servidor (padrão 8501)")
+
+    p_br = sub.add_parser(
+        "brasileirao",
+        help="jogos do Campeonato Brasileiro + odds 1X2 via RapidAPI (exporta CSV/JSON)",
+    )
+    p_br.add_argument(
+        "--temporadas",
+        default="2025,2026",
+        help="anos separados por vírgula (padrão: 2025,2026)",
+    )
+    p_br.add_argument(
+        "--serie", default="a", help="séries separadas por vírgula: a, b (padrão: a)"
+    )
+    p_br.add_argument("--csv", help="arquivo CSV de saída (ex.: brasileirao.csv)")
+    p_br.add_argument("--json", dest="json_out", help="arquivo JSON de saída (odds por casa)")
+    p_br.add_argument("--sep", default=",", help="separador do CSV (padrão: ,)")
+    p_br.add_argument(
+        "--sem-odds",
+        action="store_true",
+        help="só a tabela de jogos (1 request por temporada, não gasta cota com odds)",
+    )
+    p_br.add_argument(
+        "--so-futuros",
+        action="store_true",
+        help="ignora jogos já iniciados — odds pré-jogo só existem antes do apito",
+    )
+    p_br.add_argument("--limite", type=int, default=20, help="linhas impressas (padrão 20)")
+    p_br.add_argument(
+        "--sem-cache",
+        action="store_true",
+        help="não lê/grava o cache de odds em disco (BETO_RAPIDAPI_CACHE_DIR)",
+    )
+    p_br.add_argument(
+        "--descobrir",
+        action="store_true",
+        help="testa as rotas candidatas da API com a sua chave e imprime o que cada uma devolve",
+    )
     return parser
 
 
@@ -81,6 +119,99 @@ def _launch_ui(port: int) -> None:
     )
 
 
+def _csv_list(value: str) -> list[str]:
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
+
+
+def _run_brasileirao(args: argparse.Namespace, settings: Settings) -> None:
+    from pathlib import Path
+
+    from beto.sources import brasileirao
+    from beto.sources.rapidapi_football import (
+        BRASILEIRAO,
+        RapidApiError,
+        RapidApiFootball,
+    )
+
+    if not settings.rapidapi_key:
+        raise SystemExit(
+            "Falta a chave da RapidAPI. Pegue em rapidapi.com/Creativesdev/api/"
+            "free-api-live-football-data (botão Subscribe → chave em X-RapidAPI-Key) e "
+            "defina BETO_RAPIDAPI_KEY no .env."
+        )
+
+    series = _csv_list(args.serie)
+    try:
+        years = [int(y) for y in _csv_list(args.temporadas)]
+    except ValueError:
+        raise SystemExit("--temporadas aceita apenas anos, ex.: --temporadas 2025,2026") from None
+
+    cache_dir = None if args.sem_cache else Path(settings.rapidapi_cache_dir)
+
+    if args.descobrir:
+        league = BRASILEIRAO.get(series[0], BRASILEIRAO["a"])
+
+        async def probe() -> None:
+            async with RapidApiFootball(
+                settings.rapidapi_key or "",
+                host=settings.rapidapi_host,
+                concurrency=1,
+                min_interval_s=settings.rapidapi_min_interval_s,
+            ) as api:
+                matches = []
+                with contextlib.suppress(RapidApiError):
+                    matches = await api.season_matches(league=league, season=str(years[0]))
+                results = await api.discover(
+                    league_id=league.league_id,
+                    season=str(years[0]),
+                    match_id=matches[0].match_id if matches else None,
+                )
+            print(f"\nDESCOBERTA DE ROTAS — {league.name} (leagueid={league.league_id})\n")
+            print(f"{'rota':<44} {'HTTP':>5}  detalhe")
+            print("-" * 100)
+            for r in results:
+                print(f"{r.path:<44} {str(r.status or '-'):>5}  {r.detail[:48]}")
+            if not matches:
+                print(
+                    "\nNenhum jogo lido — sem match_id, as rotas de odds não foram testadas."
+                )
+            print(
+                "\nFixe as rotas que funcionaram em BETO_RAPIDAPI_MATCHES_PATH e "
+                "BETO_RAPIDAPI_ODDS_PATH para pular a descoberta nas próximas rodadas."
+            )
+
+        asyncio.run(probe())
+        return
+
+    report = asyncio.run(
+        brasileirao.collect(
+            api_key=settings.rapidapi_key,
+            years=years,
+            series=series,
+            with_odds=not args.sem_odds,
+            only_upcoming=args.so_futuros,
+            host=settings.rapidapi_host,
+            concurrency=settings.rapidapi_concurrency,
+            min_interval_s=settings.rapidapi_min_interval_s,
+            cache_dir=cache_dir,
+            matches_path=settings.rapidapi_matches_path,
+            odds_path=settings.rapidapi_odds_path,
+        )
+    )
+    label = "/".join(s.upper() for s in series)
+    print(
+        f"\nCAMPEONATO BRASILEIRO — série {label} — "
+        f"temporadas {', '.join(str(y) for y in years)}\n"
+    )
+    print(brasileirao.format_report(report, limit=args.limite))
+    if args.csv:
+        brasileirao.write_csv(report, Path(args.csv), sep=args.sep)
+        print(f"\nCSV: {args.csv}")
+    if args.json_out:
+        brasileirao.write_json(report, Path(args.json_out))
+        print(f"JSON: {args.json_out}")
+
+
 def _settings_from(args: argparse.Namespace) -> Settings:
     overrides: dict[str, object] = {}
     if getattr(args, "debug_dump", False):
@@ -103,6 +234,11 @@ def main(argv: list[str] | None = None) -> None:
 
     settings = _settings_from(args)
     setup_logging(settings.log_level, settings.log_json)
+
+    if args.command == "brasileirao":
+        _run_brasileirao(args, settings)
+        return
+
     houses = (
         [h.strip().lower() for h in args.houses.split(",") if h.strip()]
         if args.houses
