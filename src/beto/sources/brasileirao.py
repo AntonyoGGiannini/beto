@@ -108,6 +108,7 @@ class CollectReport:
     requests_made: int = 0
     cache_hits: int = 0
     errors: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     truncated: bool = False  # cota estourou no meio
 
     @property
@@ -155,16 +156,27 @@ async def collect_season(
         report.rows.extend(Row(m, league.key, MatchOdds(m)) for m in matches)
         return
 
-    for match in matches:
-        try:
-            odds = await api.match_odds(match)
-        except QuotaExceeded as exc:
-            report.errors.append(f"cota esgotada durante {league.name} {year}: {exc}")
-            report.truncated = True
+    # Em lotes: `api.concurrency` requests em voo (o semáforo do cliente é o teto real),
+    # ordem preservada e cota checada a cada lote — um `await` por jogo desperdiçaria
+    # a concorrência configurada, e um gather de 380 jogos ignoraria o corte por cota.
+    batch = max(1, api.concurrency) * 4
+    for start in range(0, len(matches), batch):
+        chunk = matches[start : start + batch]
+        results = await asyncio.gather(
+            *(api.match_odds(m) for m in chunk), return_exceptions=True
+        )
+        for match, result in zip(chunk, results, strict=True):
+            if isinstance(result, QuotaExceeded):
+                report.errors.append(f"cota esgotada durante {league.name} {year}: {result}")
+                report.truncated = True
+                continue
+            if isinstance(result, BaseException):
+                raise result
+            if result.error:
+                report.errors.append(f"{match.home} x {match.away}: {result.error}")
+            report.rows.append(Row(match, league.key, result))
+        if report.truncated:
             return
-        if odds.error:
-            report.errors.append(f"{match.home} x {match.away}: {odds.error}")
-        report.rows.append(Row(match, league.key, odds))
 
 
 async def collect(
@@ -178,6 +190,7 @@ async def collect(
     concurrency: int = 4,
     min_interval_s: float = 0.15,
     cache_dir: Path | None = None,
+    odds_ttl_s: float = 900.0,
     matches_path: str | None = None,
     odds_path: str | None = None,
 ) -> CollectReport:
@@ -187,6 +200,7 @@ async def collect(
         "concurrency": concurrency,
         "min_interval_s": min_interval_s,
         "cache_dir": cache_dir,
+        "odds_ttl_s": odds_ttl_s,
         "matches_path": matches_path,
         "odds_path": odds_path,
     }
@@ -216,6 +230,11 @@ async def collect(
                 break
         report.requests_made = api.requests_made
         report.cache_hits = api.cache_hits
+        if "odds" in api.weak_routes:
+            report.notes.append(
+                "a rota de odds foi fixada sem nenhuma cotação de amostra — pode ser a "
+                "rota errada. Confirme com `beto brasileirao --descobrir`."
+            )
     report.rows.sort(
         key=lambda r: (
             r.serie,
@@ -299,6 +318,7 @@ def format_report(report: CollectReport, *, limit: int = 20) -> str:
             "(odds pré-jogo só existem antes do apito) — confirme com uma temporada "
             "em andamento, ou rode `--descobrir` para checar a rota de odds."
         )
+    lines.extend(f"nota: {n}" for n in report.notes)
     if report.truncated:
         lines.append("ATENÇÃO: coleta interrompida — cota da RapidAPI esgotada.")
     if report.errors:

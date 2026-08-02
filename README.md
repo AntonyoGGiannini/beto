@@ -179,9 +179,18 @@ que a API devolveu, que é o que alimenta a detecção de arbitragem
 
 > **Cota.** É uma request por jogo para as odds: uma temporada da Série A (380 jogos)
 > consome ~380 chamadas. O plano gratuito da RapidAPI é limitado — por isso as respostas
-> de odds ficam em cache em `.cache/rapidapi/` (re-rodar não cobra de novo) e a coleta
-> **para sozinha** com aviso quando a cota estoura, em vez de martelar a API. Use
-> `--so-futuros` para gastar cota só com o que ainda dá para apostar.
+> de odds ficam em cache em `.cache/rapidapi/` e a coleta **para sozinha** com aviso
+> quando a cota estoura, em vez de martelar a API. Use `--so-futuros` para gastar cota
+> só com o que ainda dá para apostar.
+>
+> O cache tem duas políticas, porque os dois casos são diferentes: jogo **já iniciado**
+> não muda mais de preço e fica em cache para sempre; jogo **futuro** vale
+> `BETO_RAPIDAPI_ODDS_TTL_S` (padrão 900 s), já que preço pré-jogo muda o tempo todo —
+> e resposta vazia de jogo futuro não é gravada, para o mercado ainda não aberto não
+> congelar um "sem odds" permanente.
+>
+> As odds são buscadas em paralelo, com `BETO_RAPIDAPI_CONCURRENCY` (padrão 4) requests
+> em voo e `BETO_RAPIDAPI_MIN_INTERVAL_S` entre elas.
 
 > **Temporadas encerradas.** Odds pré-jogo existem enquanto o jogo não começou. Numa
 > temporada já terminada (2025) a API tende a devolver odds vazias ou de fechamento —

@@ -194,6 +194,7 @@ def _run_brasileirao(args: argparse.Namespace, settings: Settings) -> None:
             concurrency=settings.rapidapi_concurrency,
             min_interval_s=settings.rapidapi_min_interval_s,
             cache_dir=cache_dir,
+            odds_ttl_s=settings.rapidapi_odds_ttl_s,
             matches_path=settings.rapidapi_matches_path,
             odds_path=settings.rapidapi_odds_path,
         )

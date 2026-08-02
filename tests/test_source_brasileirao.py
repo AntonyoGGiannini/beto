@@ -6,6 +6,7 @@ e os parsers contra as fixtures em `tests/fixtures/rapidapi_*.json`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,7 @@ from beto.models import MarketType
 from beto.sources import brasileirao
 from beto.sources.rapidapi_football import (
     BRASILEIRAO,
+    ODDS_PATHS,
     Match,
     MatchOdds,
     QuotaExceeded,
@@ -194,6 +196,104 @@ async def test_odds_de_jogo_sem_cotacao_nao_derruba_a_coleta():
     assert odds.error is not None
 
 
+async def test_rota_de_odds_e_fixada_mesmo_quando_o_jogo_nao_tem_cotacao():
+    """Jogo encerrado devolve payload vazio pela rota CERTA — não pode re-descobrir."""
+    chamadas: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        chamadas.append(request.url.path)
+        if request.url.path == "/football-get-match-odds":
+            return httpx.Response(404, json={"message": "Endpoint does not exist"})
+        # rota válida, mas nenhum jogo desta amostra tem mercado aberto
+        return httpx.Response(200, json={"status": "success", "response": {"odds": []}})
+
+    matches = parse_matches(MATCHES_PAYLOAD, league=SERIE_A, season="2026")
+    async with _client(handler) as api:
+        for match in matches:
+            assert (await api.match_odds(match)).available is False
+        assert api.weak_routes == {"odds"}
+
+    # descoberta uma vez (4 candidatos); o 2º jogo já usa a rota fixada — sem re-varrer
+    assert chamadas[:4] == list(ODDS_PATHS)
+    assert chamadas[4:] == ["/football-get-all-odds-by-match"]
+
+
+async def test_rota_errada_nao_e_confundida_com_jogo_sem_odds():
+    """`{"message": …}` é rota errada, não payload vazio legítimo — segue procurando."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/football-match-odds":
+            return httpx.Response(200, json=ODDS_PAYLOAD)
+        return httpx.Response(200, json={"message": "Endpoint does not exist"})
+
+    match = parse_matches(MATCHES_PAYLOAD, league=SERIE_A, season="2026")[1]
+    async with _client(handler) as api:
+        odds = await api.match_odds(match)
+    assert odds.available is True
+    assert api.weak_routes == set()
+
+
+def _envelhece_cache(tmp_path: Path, *, segundos: float) -> None:
+    """Recua o carimbo de gravação dos arquivos de cache — testa a validade real."""
+    for arquivo in tmp_path.glob("odds-*.json"):
+        envelope = json.loads(arquivo.read_text(encoding="utf-8"))
+        envelope["_cached_at"] -= segundos
+        arquivo.write_text(json.dumps(envelope), encoding="utf-8")
+
+
+async def test_odds_de_jogo_futuro_expiram_no_cache(tmp_path):
+    chamadas: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        chamadas.append(request.url.path)
+        return httpx.Response(200, json=ODDS_PAYLOAD)
+
+    futuro = parse_matches(MATCHES_PAYLOAD, league=SERIE_A, season="2026")[1]
+    assert futuro.started is False
+    async with _client(handler, cache_dir=tmp_path, odds_ttl_s=60.0) as api:
+        await api.match_odds(futuro)
+        await api.match_odds(futuro)  # dentro da validade → cache
+        assert len(chamadas) == 1
+        # o preço pré-jogo muda: passada a validade, busca de novo
+        _envelhece_cache(tmp_path, segundos=120)
+        await api.match_odds(futuro)
+    assert len(chamadas) == 2
+
+
+async def test_jogo_encerrado_fica_em_cache_para_sempre(tmp_path):
+    chamadas: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        chamadas.append(request.url.path)
+        return httpx.Response(200, json=ODDS_PAYLOAD)
+
+    encerrado = parse_matches(MATCHES_PAYLOAD, league=SERIE_A, season="2025")[0]
+    assert encerrado.started is True
+    async with _client(handler, cache_dir=tmp_path, odds_ttl_s=1.0) as api:
+        await api.match_odds(encerrado)
+        _envelhece_cache(tmp_path, segundos=86_400)
+        await api.match_odds(encerrado)
+    assert len(chamadas) == 1
+
+
+async def test_resposta_vazia_de_jogo_futuro_nao_e_cacheada(tmp_path):
+    """Mercado ainda não aberto não pode congelar um "sem odds" permanente."""
+    chamadas: list[str] = []
+    payloads = [{"status": "success", "response": {"odds": []}}, ODDS_PAYLOAD]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        chamadas.append(request.url.path)
+        return httpx.Response(200, json=payloads[min(len(chamadas) - 1, 1)])
+
+    futuro = parse_matches(MATCHES_PAYLOAD, league=SERIE_A, season="2026")[1]
+    # rota fixada: o teste é sobre o cache, não sobre descoberta
+    async with _client(handler, cache_dir=tmp_path, odds_path="/football-get-match-odds") as api:
+        assert (await api.match_odds(futuro)).available is False
+        assert not list(tmp_path.glob("odds-*.json"))  # vazio não vira cache
+        segunda = await api.match_odds(futuro)  # mercado abriu
+    assert segunda.available is True
+    assert list(tmp_path.glob("odds-*.json"))  # agora sim gravou
+
+
 async def test_cache_em_disco_evita_segunda_chamada(tmp_path):
     chamadas: list[str] = []
 
@@ -214,6 +314,52 @@ async def test_cache_em_disco_evita_segunda_chamada(tmp_path):
 # ------------------------------- coleta/export -------------------------------
 
 
+def _patch_transport(monkeypatch, handler, **defaults) -> None:
+    """Faz todo `RapidApiFootball` criado por `collect()` falar com o MockTransport."""
+    real_init = RapidApiFootball.__init__
+
+    def fake_init(self, api_key, **kwargs):
+        kwargs["min_interval_s"] = 0.0
+        kwargs.update(defaults)
+        real_init(self, api_key, **kwargs)
+        self._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=self.base_url
+        )
+
+    monkeypatch.setattr(RapidApiFootball, "__init__", fake_init)
+
+
+async def test_odds_sao_buscadas_em_paralelo(monkeypatch):
+    """BETO_RAPIDAPI_CONCURRENCY precisa valer também no caminho da CLI."""
+    em_voo = 0
+    pico = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal em_voo, pico
+        if "matches" in request.url.path:
+            return httpx.Response(200, json=MATCHES_PAYLOAD)
+        em_voo += 1
+        pico = max(pico, em_voo)
+        await asyncio.sleep(0.01)  # segura a request para as outras entrarem
+        em_voo -= 1
+        return httpx.Response(200, json=ODDS_PAYLOAD)
+
+    # rota fixada: a descoberta serializa a 1ª chamada de propósito (uma task só
+    # descobre, as demais esperam) — aqui o que interessa é o regime permanente
+    _patch_transport(monkeypatch, handler, odds_path="/football-get-match-odds")
+    report = await brasileirao.collect(
+        api_key="chave-de-teste",
+        years=[2026],
+        series=["a"],
+        concurrency=2,
+        cache_dir=None,
+        odds_path="/football-get-match-odds",
+    )
+
+    assert len(report.rows) == 2
+    assert pico == 2  # sem o gather em lotes o pico seria 1
+
+
 async def test_collect_exporta_csv_com_as_tres_odds(tmp_path, monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -223,16 +369,7 @@ async def test_collect_exporta_csv_com_as_tres_odds(tmp_path, monkeypatch):
             return httpx.Response(200, json=ODDS_PAYLOAD)
         return httpx.Response(404, json={})
 
-    real_init = RapidApiFootball.__init__
-
-    def fake_init(self, api_key, **kwargs):
-        kwargs["min_interval_s"] = 0.0
-        real_init(self, api_key, **kwargs)
-        self._client = httpx.AsyncClient(
-            transport=httpx.MockTransport(handler), base_url=self.base_url
-        )
-
-    monkeypatch.setattr(RapidApiFootball, "__init__", fake_init)
+    _patch_transport(monkeypatch, handler)
 
     report = await brasileirao.collect(
         api_key="chave-de-teste", years=[2026], series=["a"], cache_dir=None

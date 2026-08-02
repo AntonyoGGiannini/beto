@@ -551,6 +551,28 @@ def _retryable(exc: BaseException) -> bool:
     return False
 
 
+_ERROR_STATUSES = ("error", "failure", "fail", "false")
+_CACHE_STAMP = "_cached_at"  # epoch de gravação — base da validade do cache
+
+
+def _plausible_envelope(payload: Any) -> bool:
+    """A resposta parece um sucesso da API (ainda que sem o dado que queríamos)?
+
+    Distingue "rota certa, jogo sem odds" de "rota errada": a segunda costuma vir como
+    `{"message": "Endpoint … does not exist"}` ou `{"status": "error"}`.
+    """
+    if isinstance(payload, list):
+        return True
+    if not isinstance(payload, dict):
+        return False
+    status = payload.get("status")
+    if isinstance(status, str) and status.lower() in _ERROR_STATUSES:
+        return False
+    if payload.keys() <= {"message", "messages", "error", "errors"}:
+        return False
+    return bool(payload)
+
+
 @dataclass(slots=True)
 class ProbeResult:
     """O que um caminho candidato devolveu — matéria-prima do `--descobrir`."""
@@ -573,6 +595,7 @@ class RapidApiFootball:
         concurrency: int = 4,
         min_interval_s: float = 0.15,
         cache_dir: Path | None = None,
+        odds_ttl_s: float = 900.0,
         matches_path: str | None = None,
         odds_path: str | None = None,
     ) -> None:
@@ -591,13 +614,18 @@ class RapidApiFootball:
                 "Accept": "application/json",
             },
         )
-        self._sem = asyncio.Semaphore(max(1, concurrency))
+        self.concurrency = max(1, concurrency)
+        self._sem = asyncio.Semaphore(self.concurrency)
         self._min_interval_s = max(0.0, min_interval_s)
         self._next_at = 0.0
         self._pace_lock = asyncio.Lock()
         self.cache_dir = cache_dir
+        # validade do cache de odds de jogo AINDA NÃO iniciado (preço muda o tempo todo)
+        self.odds_ttl_s = max(0.0, odds_ttl_s)
         # rotas fixadas à mão têm prioridade sobre a descoberta automática
         self._resolved: dict[str, str] = {}
+        self._resolve_locks: dict[str, asyncio.Lock] = {}
+        self.weak_routes: set[str] = set()
         if matches_path:
             self._resolved["matches"] = matches_path
         if odds_path:
@@ -668,13 +696,47 @@ class RapidApiFootball:
     # --------------------------- resolução de rota ---------------------------
 
     async def _resolve(
-        self, op: str, candidates: Sequence[str], params: dict[str, str], probe: Any
+        self,
+        op: str,
+        candidates: Sequence[str],
+        params: dict[str, str],
+        probe: Any,
+        *,
+        allow_weak: bool = False,
     ) -> tuple[str, Any]:
-        """Fixa (e memoriza) o primeiro candidato cujo payload passa em `probe`."""
+        """Fixa (e memoriza) o primeiro candidato cujo payload passa em `probe`.
+
+        `allow_weak` separa "a rota é válida" de "este jogo tem dado agora" — o caso
+        das odds: um jogo encerrado (ou ainda sem mercado aberto) devolve payload vazio
+        pela rota CERTA. Sem isso, cada jogo sem cotação re-testaria todos os candidatos
+        e a cota evaporaria antes de chegar nos jogos futuros. Quando nenhum candidato
+        traz dado mas algum respondeu com um envelope plausível, esse é fixado (com
+        aviso) em vez de deixar a operação eternamente por resolver.
+        """
         if op in self._resolved:
             path = self._resolved[op]
             return path, await self.get(path, params)
+        # sob concorrência, só uma task descobre a rota; as demais esperam e reusam
+        lock = self._resolve_locks.setdefault(op, asyncio.Lock())
+        async with lock:
+            if op not in self._resolved:
+                return await self._discover_route(
+                    op, candidates, params, probe, allow_weak=allow_weak
+                )
+            path = self._resolved[op]
+        return path, await self.get(path, params)
+
+    async def _discover_route(
+        self,
+        op: str,
+        candidates: Sequence[str],
+        params: dict[str, str],
+        probe: Any,
+        *,
+        allow_weak: bool,
+    ) -> tuple[str, Any]:
         errors: list[str] = []
+        weak: tuple[str, Any] | None = None
         for path in candidates:
             try:
                 payload = await self.get(path, params)
@@ -687,7 +749,15 @@ class RapidApiFootball:
                 self._resolved[op] = path
                 log.info("rapidapi.rota_resolvida", op=op, path=path)
                 return path, payload
+            if weak is None and _plausible_envelope(payload):
+                weak = (path, payload)
             errors.append(f"{path}: 2xx mas sem dado reconhecível")
+        if allow_weak and weak is not None:
+            path, payload = weak
+            self._resolved[op] = path
+            self.weak_routes.add(op)
+            log.warning("rapidapi.rota_fixada_sem_dado", op=op, path=path)
+            return path, payload
         raise RapidApiError(
             f"nenhuma rota de '{op}' respondeu com dados úteis. Tentativas: "
             + " | ".join(errors)
@@ -799,28 +869,36 @@ class RapidApiFootball:
         return contains[0] if contains else str(year)
 
     async def match_odds(self, match: Match) -> MatchOdds:
-        """Odds 1X2 do jogo (mandante · empate · visitante), com cache em disco."""
-        cached = self._cache_read(match.match_id)
+        """Odds 1X2 do jogo (mandante · empate · visitante), com cache em disco.
+
+        O cache tem duas políticas, porque os dois casos são diferentes: jogo já
+        iniciado não muda mais de preço (cache eterno), jogo futuro muda o tempo todo
+        (vale `odds_ttl_s`). E resposta vazia de jogo futuro NÃO é gravada — o mercado
+        pode simplesmente ainda não ter aberto, e cachear isso congelaria o "sem odds".
+        """
+        # jogo já iniciado: o preço não muda mais, cache não expira
+        ttl = None if match.started else self.odds_ttl_s
+        cached = self._cache_read(match.match_id, ttl_s=ttl)
         if cached is not None:
             self.cache_hits += 1
             return MatchOdds(match, tuple(extract_1x2(cached, home=match.home, away=match.away)))
         params = {"eventid": match.match_id, "matchid": match.match_id}
         try:
-            if "odds" in self._resolved:
-                payload = await self.get(self._resolved["odds"], params)
-            else:
-                _path, payload = await self._resolve(
-                    "odds",
-                    ODDS_PATHS,
-                    params,
-                    probe=lambda p: bool(extract_1x2(p, home=match.home, away=match.away)),
-                )
+            _path, payload = await self._resolve(
+                "odds",
+                ODDS_PATHS,
+                params,
+                probe=lambda p: bool(extract_1x2(p, home=match.home, away=match.away)),
+                allow_weak=True,
+            )
         except QuotaExceeded:
             raise
         except RapidApiError as exc:
             return MatchOdds(match, (), error=str(exc)[:200])
-        self._cache_write(match.match_id, payload)
-        return MatchOdds(match, tuple(extract_1x2(payload, home=match.home, away=match.away)))
+        books = tuple(extract_1x2(payload, home=match.home, away=match.away))
+        if books or match.started:
+            self._cache_write(match.match_id, payload)
+        return MatchOdds(match, books)
 
     # -------------------------------- cache --------------------------------
 
@@ -830,19 +908,28 @@ class RapidApiFootball:
         safe = "".join(c if c.isalnum() else "-" for c in match_id)[:64]
         return self.cache_dir / f"odds-{safe}.json"
 
-    def _cache_read(self, match_id: str) -> Any | None:
+    def _cache_read(self, match_id: str, *, ttl_s: float | None) -> Any | None:
+        """Payload em cache, ou None se ausente/ilegível/vencido. `ttl_s=None` = eterno."""
         path = self._cache_path(match_id)
         if path is None or not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            envelope = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        if not isinstance(envelope, dict) or _CACHE_STAMP not in envelope:
+            return None  # formato antigo/estranho: trata como ausente
+        if ttl_s is not None:
+            age = time.time() - float(envelope.get(_CACHE_STAMP) or 0.0)
+            if age < 0 or age > ttl_s:
+                return None
+        return envelope.get("payload")
 
     def _cache_write(self, match_id: str, payload: Any) -> None:
         path = self._cache_path(match_id)
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
+        envelope = {_CACHE_STAMP: time.time(), "payload": payload}
         with contextlib.suppress(OSError, TypeError, ValueError):
-            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            path.write_text(json.dumps(envelope, ensure_ascii=False), encoding="utf-8")
