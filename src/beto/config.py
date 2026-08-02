@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     # útil para sair por um IP residencial brasileiro (casas .bet.br geo-bloqueiam)
     proxy_server: str | None = None
 
+    # --- RapidAPI "Free API Live Football Data" (comando `beto brasileirao`) ---
+    rapidapi_key: str | None = None
+    rapidapi_host: str = "free-api-live-football-data.p.rapidapi.com"
+    rapidapi_concurrency: int = 4
+    rapidapi_min_interval_s: float = 0.15
+    rapidapi_cache_dir: str = ".cache/rapidapi"
+    # validade do cache de odds de jogo ainda não iniciado (preço muda o tempo todo);
+    # jogo já iniciado fica em cache para sempre — o preço dele não muda mais
+    rapidapi_odds_ttl_s: float = 900.0
+    # rotas fixas (opcional): pulam a descoberta automática — ver `--descobrir`
+    rapidapi_matches_path: str | None = None
+    rapidapi_odds_path: str | None = None
+
     db_path: str = "beto.db"
     log_level: str = "INFO"
     log_json: bool = False

@@ -1,0 +1,39 @@
+{
+  "status": "success",
+  "response": {
+    "matches": {
+      "allMatches": [
+        {
+          "id": "4506310",
+          "round": "1",
+          "home": { "id": 8350, "name": "Flamengo", "score": 2 },
+          "away": { "id": 8351, "name": "Palmeiras", "score": 1 },
+          "status": {
+            "utcTime": "2026-08-09T21:00:00.000Z",
+            "finished": false,
+            "started": false,
+            "scoreStr": null
+          }
+        },
+        {
+          "id": "4506311",
+          "round": "1",
+          "home": { "id": 8352, "name": "Corinthians", "score": 0 },
+          "away": { "id": 8353, "name": "São Paulo", "score": 0 },
+          "status": {
+            "utcTime": "2025-05-11T19:30:00.000Z",
+            "finished": true,
+            "started": true,
+            "scoreStr": "0 - 0"
+          }
+        },
+        {
+          "id": null,
+          "home": { "name": "Sem id" },
+          "away": { "name": "Ignorado" },
+          "status": { "utcTime": "2026-08-10T21:00:00.000Z" }
+        }
+      ]
+    }
+  }
+}

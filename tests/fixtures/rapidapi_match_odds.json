@@ -1,0 +1,32 @@
+{
+  "status": "success",
+  "response": {
+    "odds": [
+      {
+        "provider": "Betano",
+        "market": "Full time result",
+        "odds": [
+          { "name": "Flamengo", "odd": 1.95 },
+          { "name": "Draw", "odd": 3.55 },
+          { "name": "Palmeiras", "odd": 4.1 }
+        ]
+      },
+      {
+        "provider": "Bet365",
+        "market": "1X2",
+        "1": 2.05,
+        "x": 3.4,
+        "2": 3.9
+      },
+      {
+        "provider": "Betano",
+        "market": "1st Half result",
+        "odds": [
+          { "name": "Flamengo", "odd": 2.9 },
+          { "name": "Empate", "odd": 2.1 },
+          { "name": "Palmeiras", "odd": 5.5 }
+        ]
+      }
+    ]
+  }
+}
